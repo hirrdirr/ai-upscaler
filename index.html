@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
-  <title>AI Upscaler – Browser Only</title>
+  <title>AI Upscaler – Client-side</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
@@ -13,18 +13,19 @@
       padding: 20px;
       box-sizing: border-box;
     }
-    h1 {
-      margin-top: 0;
-      font-size: 1.8rem;
-    }
     .card {
-      max-width: 1000px;
+      max-width: 900px;
       margin: 0 auto;
       background: #181818;
       border-radius: 12px;
       padding: 20px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
       border: 1px solid #333;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.7rem;
+      margin-bottom: 10px;
     }
     .controls {
       display: flex;
@@ -44,9 +45,6 @@
       border: 1px solid #333;
       padding: 6px 8px;
     }
-    input[type="file"] {
-      color: #ddd;
-    }
     button {
       border: none;
       padding: 8px 16px;
@@ -62,9 +60,27 @@
     }
     #status {
       font-size: 0.9rem;
-      margin-bottom: 12px;
+      margin: 8px 0 12px 0;
       color: #aaa;
     }
+
+    /* Progressbar */
+    #progressContainer {
+      width: 100%;
+      background: #222;
+      border-radius: 6px;
+      overflow: hidden;
+      height: 12px;
+      display: none;
+      margin-bottom: 12px;
+    }
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa);
+      transition: width 0.2s ease-out;
+    }
+
     .preview-wrapper {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -84,168 +100,175 @@
     .preview img {
       max-width: 100%;
       height: auto;
-      display: block;
       border-radius: 6px;
-      background: #000;
+      background: black;
     }
     #downloadLink {
       display: inline-block;
       margin-top: 8px;
+      color: #4ade80;
       font-size: 0.9rem;
       text-decoration: none;
-      color: #4ade80;
     }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>AI Upscaler (Client-side)</h1>
+    <h1>AI Upscaler</h1>
     <p style="font-size:0.95rem;color:#bbb;">
-      Allt körs i din webbläsare. Ingen bild lämnar din dator. Första uppskalningen kan vara seg när modellen laddas in.
+      Allt körs direkt i din webbläsare. Ingen bild laddas upp till någon server.
     </p>
 
     <div class="controls">
       <input type="file" id="fileInput" accept="image/*" />
       <label for="scaleSelect">Skala:</label>
       <select id="scaleSelect">
-        <option value="2">2x (snabbare)</option>
-        <option value="4">4x (bättre, långsammare)</option>
+        <option value="2">2x</option>
+        <option value="4">4x</option>
       </select>
       <button id="upscaleBtn" disabled>Upscale</button>
     </div>
 
     <div id="status">Ladda upp en bild för att börja.</div>
 
+    <!-- Progress bar -->
+    <div id="progressContainer">
+      <div id="progressBar"></div>
+    </div>
+
     <div class="preview-wrapper">
       <div class="preview">
         <h2>Original</h2>
-        <img id="originalImg" alt="Originalbild" />
+        <img id="originalImg" />
       </div>
       <div class="preview">
         <h2>Upscalad</h2>
-        <img id="upscaledImg" alt="Upscalad bild" />
-        <a id="downloadLink" href="#" download="upscaled.png" style="display:none;">Ladda ner upscalad bild</a>
+        <img id="upscaledImg" />
+        <a id="downloadLink" href="#" download="upscaled.png" style="display:none;">Ladda ner bild</a>
       </div>
     </div>
   </div>
 
   <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <!-- Standard UpscalerJS-modell (2x ESRGAN-slim) -->
+  <!-- Standard UpscalerJS-modell -->
   <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js"></script>
-  <!-- Själva UpscalerJS -->
+  <!-- UpscalerJS -->
   <script src="https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js"></script>
 
   <script>
-    const fileInput    = document.getElementById('fileInput');
-    const upscaleBtn   = document.getElementById('upscaleBtn');
-    const originalImg  = document.getElementById('originalImg');
-    const upscaledImg  = document.getElementById('upscaledImg');
-    const statusEl     = document.getElementById('status');
+    const fileInput = document.getElementById('fileInput');
+    const upscaleBtn = document.getElementById('upscaleBtn');
+    const originalImg = document.getElementById('originalImg');
+    const upscaledImg = document.getElementById('upscaledImg');
     const downloadLink = document.getElementById('downloadLink');
-    const scaleSelect  = document.getElementById('scaleSelect');
+    const statusEl = document.getElementById('status');
+    const scaleSelect = document.getElementById('scaleSelect');
+
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
 
     let upscaler = null;
-    let modelReady = false;
 
-    // Init UpscalerJS
     window.addEventListener('load', () => {
-      try {
-        statusEl.textContent = 'Laddar AI-modell i bakgrunden... första körningen kan vara seg.';
-        upscaler = new Upscaler({
-          model: DefaultUpscalerJSModel,
-        });
-        modelReady = true;
-        statusEl.textContent = 'Modell klar. Ladda upp en bild.';
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = 'Kunde inte initiera UpscalerJS. Kolla konsolen (F12).';
-      }
+      upscaler = new Upscaler({
+        model: DefaultUpscalerJSModel,
+      });
+      statusEl.textContent = 'Modell klar. Ladda upp en bild.';
     });
 
-    // När användaren väljer bild
-    fileInput.addEventListener('change', (e) => {
+    fileInput.addEventListener('change', e => {
       const file = e.target.files[0];
-      if (!file) {
-        return;
-      }
+      if (!file) return;
+
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = ev => {
         originalImg.src = ev.target.result;
         upscaledImg.src = '';
         downloadLink.style.display = 'none';
-        if (modelReady) {
-          statusEl.textContent = 'Bild laddad. Välj skala och klicka på "Upscale".';
-          upscaleBtn.disabled = false;
-        } else {
-          statusEl.textContent = 'Modellen laddas fortfarande. Vänta några sekunder.';
-        }
+        upscaleBtn.disabled = false;
+        statusEl.textContent = 'Bild laddad. Välj skala och kör.';
       };
       reader.readAsDataURL(file);
     });
 
+    function startFakeProgress() {
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '0%';
+
+      let value = 0;
+      const interval = setInterval(() => {
+        if (value < 85) {
+          value += Math.random() * 4;
+          progressBar.style.width = Math.min(value, 85) + '%';
+        }
+      }, 200);
+
+      return interval;
+    }
+
+    function finishProgress(interval) {
+      clearInterval(interval);
+      progressBar.style.width = '100%';
+      setTimeout(() => {
+        progressContainer.style.display = 'none';
+        progressBar.style.width = '0%';
+      }, 600);
+    }
+
     function waitForImageLoad(img) {
       return new Promise((resolve, reject) => {
-        if (img.complete && img.naturalWidth > 0) {
-          resolve();
-        } else {
-          img.onload = () => resolve();
-          img.onerror = (err) => reject(err);
-        }
+        if (img.complete && img.naturalWidth > 0) return resolve();
+        img.onload = () => resolve();
+        img.onerror = err => reject(err);
       });
     }
 
-    // När användaren klickar på Upscale
     upscaleBtn.addEventListener('click', async () => {
-      if (!originalImg.src || !upscaler) {
-        return;
-      }
+      if (!originalImg.src) return;
 
-      const scale = parseInt(scaleSelect.value, 10);
+      const scale = parseInt(scaleSelect.value);
+      statusEl.textContent = `Upscalear (${scale}x)...`;
 
       upscaleBtn.disabled = true;
       fileInput.disabled = true;
-      statusEl.textContent = `Upscalear i ${scale}x... detta körs 100 % i din webbläsare.`;
+
+      const progress = startFakeProgress();
 
       try {
-        let currentImg = originalImg;
-        let upscaledSrc = null;
+        const opts = { patchSize: 64, padding: 8 };
 
-        const opts = {
-          patchSize: 64,
-          padding: 8,
-        };
+        let finalSrc;
 
         if (scale === 2) {
-          // En pass 2x
-          upscaledSrc = await upscaler.upscale(currentImg, opts);
-        } else if (scale === 4) {
-          // Två pass 2x -> 4x
-          statusEl.textContent = 'Steg 1/2: 2x...';
-          const firstSrc = await upscaler.upscale(currentImg, opts);
+          finalSrc = await upscaler.upscale(originalImg, opts);
+        } 
+        else if (scale === 4) {
+          statusEl.textContent = 'Steg 1/2 (2x)...';
+          const firstPass = await upscaler.upscale(originalImg, opts);
 
-          const tempImg = new Image();
-          tempImg.src = firstSrc;
-          await waitForImageLoad(tempImg);
+          const temp = new Image();
+          temp.src = firstPass;
+          await waitForImageLoad(temp);
 
-          statusEl.textContent = 'Steg 2/2: 4x...';
-          upscaledSrc = await upscaler.upscale(tempImg, opts);
-        } else {
-          // fallback
-          upscaledSrc = await upscaler.upscale(currentImg, opts);
+          statusEl.textContent = 'Steg 2/2 (4x)...';
+          finalSrc = await upscaler.upscale(temp, opts);
         }
 
-        upscaledImg.src = upscaledSrc;
-        downloadLink.href = upscaledSrc;
+        upscaledImg.src = finalSrc;
+        downloadLink.href = finalSrc;
         downloadLink.style.display = 'inline-block';
-        statusEl.textContent = `Klar! Bilden är upscalad till ${scale}x.`;
+        statusEl.textContent = `Klar! Upscalad till ${scale}x.`;
+
       } catch (err) {
         console.error(err);
-        statusEl.textContent = 'Något gick fel vid upscaling. Kolla konsolen (F12).';
-      } finally {
-        upscaleBtn.disabled = false;
-        fileInput.disabled = false;
+        statusEl.textContent = 'Ett fel inträffade. Öppna konsolen (F12).';
       }
+
+      finishProgress(progress);
+
+      upscaleBtn.disabled = false;
+      fileInput.disabled = false;
     });
   </script>
 </body>
