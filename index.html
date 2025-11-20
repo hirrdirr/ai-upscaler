@@ -25,14 +25,19 @@
     h1 {
       margin-top: 0;
       font-size: 1.7rem;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      font-size: 0.9rem;
+      color: #bbb;
+      margin-bottom: 16px;
     }
     .controls {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
       align-items: center;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
     }
     label {
       font-size: 0.9rem;
@@ -44,6 +49,10 @@
       border-radius: 6px;
       border: 1px solid #333;
       padding: 6px 8px;
+    }
+    input[type="file"] {
+      color: #ddd;
+      max-width: 260px;
     }
     button {
       border: none;
@@ -60,7 +69,7 @@
     }
     #status {
       font-size: 0.9rem;
-      margin: 8px 0 12px 0;
+      margin: 8px 0 8px 0;
       color: #aaa;
     }
 
@@ -78,7 +87,7 @@
       width: 0%;
       height: 100%;
       background: linear-gradient(90deg, #3b82f6, #60a5fa);
-      transition: width 0.2s ease-out;
+      transition: width 0.25s ease-out;
     }
 
     .preview-wrapper {
@@ -110,12 +119,17 @@
       font-size: 0.9rem;
       text-decoration: none;
     }
+    .hint {
+      font-size: 0.8rem;
+      color: #888;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>AI Upscaler</h1>
-    <p style="font-size:0.95rem;color:#bbb;">
+    <p class="subtitle">
       Allt körs direkt i din webbläsare. Ingen bild laddas upp till någon server.
     </p>
 
@@ -123,10 +137,15 @@
       <input type="file" id="fileInput" accept="image/*" />
       <label for="scaleSelect">Skala:</label>
       <select id="scaleSelect">
-        <option value="2">2x</option>
-        <option value="4">4x</option>
+        <option value="2">2x (rekommenderad)</option>
+        <option value="4">4x (tung)</option>
+        <option value="6">6x (experimentell)</option>
+        <option value="8">8x (endast små bilder)</option>
       </select>
       <button id="upscaleBtn" disabled>Upscale</button>
+    </div>
+    <div class="hint">
+      6x och 8x kan kräva en stark dator och mindre originalbild. För stora bilder blockeras 8x automatiskt.
     </div>
 
     <div id="status">Ladda upp en bild för att börja.</div>
@@ -151,7 +170,7 @@
 
   <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <!-- Standard UpscalerJS-modell -->
+  <!-- Standard UpscalerJS-modell (2x) -->
   <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js"></script>
   <!-- UpscalerJS -->
   <script src="https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js"></script>
@@ -169,6 +188,9 @@
     const progressBar = document.getElementById('progressBar');
 
     let upscaler = null;
+
+    // Max output-storlek för 8x (skydd mot browser-död)
+    const MAX_OUTPUT_SIZE_PX = 8000; // längsta sida
 
     window.addEventListener('load', () => {
       upscaler = new Upscaler({
@@ -192,30 +214,6 @@
       reader.readAsDataURL(file);
     });
 
-    function startFakeProgress() {
-      progressContainer.style.display = 'block';
-      progressBar.style.width = '0%';
-
-      let value = 0;
-      const interval = setInterval(() => {
-        if (value < 85) {
-          value += Math.random() * 4;
-          progressBar.style.width = Math.min(value, 85) + '%';
-        }
-      }, 200);
-
-      return interval;
-    }
-
-    function finishProgress(interval) {
-      clearInterval(interval);
-      progressBar.style.width = '100%';
-      setTimeout(() => {
-        progressContainer.style.display = 'none';
-        progressBar.style.width = '0%';
-      }, 600);
-    }
-
     function waitForImageLoad(img) {
       return new Promise((resolve, reject) => {
         if (img.complete && img.naturalWidth > 0) return resolve();
@@ -224,35 +222,133 @@
       });
     }
 
+    // Steg-baserad progress: stepIndex börjar på 1
+    function setStepProgress(stepIndex, totalSteps) {
+      progressContainer.style.display = 'block';
+      const fraction = stepIndex / totalSteps;
+      const percent = Math.round(fraction * 90); // max 90 %, sista 10 % vid klar
+      progressBar.style.width = percent + '%';
+    }
+
+    function finishProgress() {
+      progressBar.style.width = '100%';
+      setTimeout(() => {
+        progressContainer.style.display = 'none';
+        progressBar.style.width = '0%';
+      }, 600);
+    }
+
+    function isScaleSafe(scale) {
+      const w = originalImg.naturalWidth || 0;
+      const h = originalImg.naturalHeight || 0;
+      if (!w || !h) return true;
+
+      const targetW = w * scale;
+      const targetH = h * scale;
+
+      if (targetW > MAX_OUTPUT_SIZE_PX || targetH > MAX_OUTPUT_SIZE_PX) {
+        alert(
+          `Bilden är för stor för ${scale}x i webbläsaren.\n\n` +
+          `Original: ${w}×${h}px\n` +
+          `Skulle bli: ${Math.round(targetW)}×${Math.round(targetH)}px\n\n` +
+          `Testa 2x eller 4x istället, eller använd en mindre bild.`
+        );
+        return false;
+      }
+      return true;
+    }
+
+    // Canvas-scaling för 6x (2x AI + 3x vanlig scaling)
+    function scaleWithCanvas(src, factor) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * factor);
+          canvas.height = Math.round(img.height * factor);
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = reject;
+        img.src = src;
+      });
+    }
+
     upscaleBtn.addEventListener('click', async () => {
       if (!originalImg.src) return;
 
-      const scale = parseInt(scaleSelect.value);
-      statusEl.textContent = `Upscalear (${scale}x)...`;
+      const scale = parseInt(scaleSelect.value, 10);
 
+      if (!isScaleSafe(scale)) {
+        return;
+      }
+
+      statusEl.textContent = `Upscalear (${scale}x)...`;
       upscaleBtn.disabled = true;
       fileInput.disabled = true;
 
-      const progress = startFakeProgress();
+      // visa progress direkt på ~5 %
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '5%';
 
       try {
         const opts = { patchSize: 64, padding: 8 };
-
-        let finalSrc;
+        let finalSrc = null;
 
         if (scale === 2) {
+          // 1 steg
+          setStepProgress(1, 1);
           finalSrc = await upscaler.upscale(originalImg, opts);
-        } 
-        else if (scale === 4) {
+        } else if (scale === 4) {
+          // 2 steg: 2x + 4x
           statusEl.textContent = 'Steg 1/2 (2x)...';
-          const firstPass = await upscaler.upscale(originalImg, opts);
+          setStepProgress(1, 2);
+          const first = await upscaler.upscale(originalImg, opts);
 
-          const temp = new Image();
-          temp.src = firstPass;
-          await waitForImageLoad(temp);
+          const tempImg = new Image();
+          tempImg.src = first;
+          await waitForImageLoad(tempImg);
 
           statusEl.textContent = 'Steg 2/2 (4x)...';
-          finalSrc = await upscaler.upscale(temp, opts);
+          setStepProgress(2, 2);
+          finalSrc = await upscaler.upscale(tempImg, opts);
+        } else if (scale === 6) {
+          // 2 steg: 2x AI + 3x canvas
+          statusEl.textContent = 'Steg 1/2 (2x AI)...';
+          setStepProgress(1, 2);
+          const first = await upscaler.upscale(originalImg, opts);
+
+          statusEl.textContent = 'Steg 2/2 (3x skalning)...';
+          setStepProgress(2, 2);
+          finalSrc = await scaleWithCanvas(first, 3);
+        } else if (scale === 8) {
+          // 3 steg: 2x, 4x, 8x
+          statusEl.textContent = 'Steg 1/3 (2x)...';
+          setStepProgress(1, 3);
+          const first = await upscaler.upscale(originalImg, opts);
+
+          const temp1 = new Image();
+          temp1.src = first;
+          await waitForImageLoad(temp1);
+
+          statusEl.textContent = 'Steg 2/3 (4x)...';
+          setStepProgress(2, 3);
+          const second = await upscaler.upscale(temp1, opts);
+
+          const temp2 = new Image();
+          temp2.src = second;
+          await waitForImageLoad(temp2);
+
+          statusEl.textContent = 'Steg 3/3 (8x)...';
+          setStepProgress(3, 3);
+          finalSrc = await upscaler.upscale(temp2, opts);
+        } else {
+          // fallback
+          setStepProgress(1, 1);
+          finalSrc = await upscaler.upscale(originalImg, opts);
         }
 
         upscaledImg.src = finalSrc;
@@ -262,11 +358,10 @@
 
       } catch (err) {
         console.error(err);
-        statusEl.textContent = 'Ett fel inträffade. Öppna konsolen (F12).';
+        statusEl.textContent = 'Ett fel inträffade. Öppna konsolen (F12) för detaljer.';
       }
 
-      finishProgress(progress);
-
+      finishProgress();
       upscaleBtn.disabled = false;
       fileInput.disabled = false;
     });
