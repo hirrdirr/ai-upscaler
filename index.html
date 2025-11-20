@@ -33,6 +33,17 @@
       align-items: center;
       margin-bottom: 16px;
     }
+    label {
+      font-size: 0.9rem;
+      color: #ccc;
+    }
+    select {
+      background: #101010;
+      color: #eee;
+      border-radius: 6px;
+      border: 1px solid #333;
+      padding: 6px 8px;
+    }
     input[type="file"] {
       color: #ddd;
     }
@@ -95,6 +106,11 @@
 
     <div class="controls">
       <input type="file" id="fileInput" accept="image/*" />
+      <label for="scaleSelect">Skala:</label>
+      <select id="scaleSelect">
+        <option value="2">2x (snabbare)</option>
+        <option value="4">4x (bättre, långsammare)</option>
+      </select>
       <button id="upscaleBtn" disabled>Upscale</button>
     </div>
 
@@ -115,7 +131,7 @@
 
   <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <!-- Standard UpscalerJS-modell -->
+  <!-- Standard UpscalerJS-modell (2x ESRGAN-slim) -->
   <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js"></script>
   <!-- Själva UpscalerJS -->
   <script src="https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js"></script>
@@ -127,6 +143,7 @@
     const upscaledImg  = document.getElementById('upscaledImg');
     const statusEl     = document.getElementById('status');
     const downloadLink = document.getElementById('downloadLink');
+    const scaleSelect  = document.getElementById('scaleSelect');
 
     let upscaler = null;
     let modelReady = false;
@@ -158,7 +175,7 @@
         upscaledImg.src = '';
         downloadLink.style.display = 'none';
         if (modelReady) {
-          statusEl.textContent = 'Bild laddad. Klicka på "Upscale".';
+          statusEl.textContent = 'Bild laddad. Välj skala och klicka på "Upscale".';
           upscaleBtn.disabled = false;
         } else {
           statusEl.textContent = 'Modellen laddas fortfarande. Vänta några sekunder.';
@@ -167,32 +184,67 @@
       reader.readAsDataURL(file);
     });
 
+    function waitForImageLoad(img) {
+      return new Promise((resolve, reject) => {
+        if (img.complete && img.naturalWidth > 0) {
+          resolve();
+        } else {
+          img.onload = () => resolve();
+          img.onerror = (err) => reject(err);
+        }
+      });
+    }
+
     // När användaren klickar på Upscale
     upscaleBtn.addEventListener('click', async () => {
       if (!originalImg.src || !upscaler) {
         return;
       }
 
+      const scale = parseInt(scaleSelect.value, 10);
+
       upscaleBtn.disabled = true;
-      statusEl.textContent = 'Upscalear... detta körs 100 % i din webbläsare.';
+      fileInput.disabled = true;
+      statusEl.textContent = `Upscalear i ${scale}x... detta körs 100 % i din webbläsare.`;
 
       try {
-        // Vi skickar in själva <img>-elementet, UpscalerJS fixar resten
-        const upscaledSrc = await upscaler.upscale(originalImg, {
-          // patchSize/padding gör att stora bilder inte dödar UI direkt
+        let currentImg = originalImg;
+        let upscaledSrc = null;
+
+        const opts = {
           patchSize: 64,
           padding: 8,
-        });
+        };
+
+        if (scale === 2) {
+          // En pass 2x
+          upscaledSrc = await upscaler.upscale(currentImg, opts);
+        } else if (scale === 4) {
+          // Två pass 2x -> 4x
+          statusEl.textContent = 'Steg 1/2: 2x...';
+          const firstSrc = await upscaler.upscale(currentImg, opts);
+
+          const tempImg = new Image();
+          tempImg.src = firstSrc;
+          await waitForImageLoad(tempImg);
+
+          statusEl.textContent = 'Steg 2/2: 4x...';
+          upscaledSrc = await upscaler.upscale(tempImg, opts);
+        } else {
+          // fallback
+          upscaledSrc = await upscaler.upscale(currentImg, opts);
+        }
 
         upscaledImg.src = upscaledSrc;
         downloadLink.href = upscaledSrc;
         downloadLink.style.display = 'inline-block';
-        statusEl.textContent = 'Klar! Bilden är upscalad.';
+        statusEl.textContent = `Klar! Bilden är upscalad till ${scale}x.`;
       } catch (err) {
         console.error(err);
         statusEl.textContent = 'Något gick fel vid upscaling. Kolla konsolen (F12).';
       } finally {
         upscaleBtn.disabled = false;
+        fileInput.disabled = false;
       }
     });
   </script>
