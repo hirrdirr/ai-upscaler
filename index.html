@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <title>AI Upscaler – Browser Only</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #111;
+      color: #eee;
+      margin: 0;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.8rem;
+    }
+    .card {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: #181818;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      border: 1px solid #333;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    input[type="file"] {
+      color: #ddd;
+    }
+    button {
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      background: #3b82f6;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    #status {
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+      color: #aaa;
+    }
+    .preview-wrapper {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-top: 10px;
+    }
+    .preview {
+      background: #101010;
+      border-radius: 8px;
+      padding: 10px;
+      border: 1px solid #222;
+    }
+    .preview h2 {
+      margin: 0 0 8px 0;
+      font-size: 1rem;
+    }
+    .preview img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 6px;
+      background: #000;
+    }
+    #downloadLink {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 0.9rem;
+      text-decoration: none;
+      color: #4ade80;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>AI Upscaler (Client-side)</h1>
+    <p style="font-size:0.95rem;color:#bbb;">
+      Allt körs i din webbläsare. Ingen bild lämnar din dator. Första uppskalningen kan vara seg när modellen laddas in.
+    </p>
+
+    <div class="controls">
+      <input type="file" id="fileInput" accept="image/*" />
+      <button id="upscaleBtn" disabled>Upscale</button>
+    </div>
+
+    <div id="status">Ladda upp en bild för att börja.</div>
+
+    <div class="preview-wrapper">
+      <div class="preview">
+        <h2>Original</h2>
+        <img id="originalImg" alt="Originalbild" />
+      </div>
+      <div class="preview">
+        <h2>Upscalad</h2>
+        <img id="upscaledImg" alt="Upscalad bild" />
+        <a id="downloadLink" href="#" download="upscaled.png" style="display:none;">Ladda ner upscalad bild</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <!-- Standard UpscalerJS-modell -->
+  <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js"></script>
+  <!-- Själva UpscalerJS -->
+  <script src="https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js"></script>
+
+  <script>
+    const fileInput    = document.getElementById('fileInput');
+    const upscaleBtn   = document.getElementById('upscaleBtn');
+    const originalImg  = document.getElementById('originalImg');
+    const upscaledImg  = document.getElementById('upscaledImg');
+    const statusEl     = document.getElementById('status');
+    const downloadLink = document.getElementById('downloadLink');
+
+    let upscaler = null;
+    let modelReady = false;
+
+    // Init UpscalerJS
+    window.addEventListener('load', () => {
+      try {
+        statusEl.textContent = 'Laddar AI-modell i bakgrunden... första körningen kan vara seg.';
+        upscaler = new Upscaler({
+          model: DefaultUpscalerJSModel,
+        });
+        modelReady = true;
+        statusEl.textContent = 'Modell klar. Ladda upp en bild.';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Kunde inte initiera UpscalerJS. Kolla konsolen (F12).';
+      }
+    });
+
+    // När användaren väljer bild
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) {
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        originalImg.src = ev.target.result;
+        upscaledImg.src = '';
+        downloadLink.style.display = 'none';
+        if (modelReady) {
+          statusEl.textContent = 'Bild laddad. Klicka på "Upscale".';
+          upscaleBtn.disabled = false;
+        } else {
+          statusEl.textContent = 'Modellen laddas fortfarande. Vänta några sekunder.';
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // När användaren klickar på Upscale
+    upscaleBtn.addEventListener('click', async () => {
+      if (!originalImg.src || !upscaler) {
+        return;
+      }
+
+      upscaleBtn.disabled = true;
+      statusEl.textContent = 'Upscalear... detta körs 100 % i din webbläsare.';
+
+      try {
+        // Vi skickar in själva <img>-elementet, UpscalerJS fixar resten
+        const upscaledSrc = await upscaler.upscale(originalImg, {
+          // patchSize/padding gör att stora bilder inte dödar UI direkt
+          patchSize: 64,
+          padding: 8,
+        });
+
+        upscaledImg.src = upscaledSrc;
+        downloadLink.href = upscaledSrc;
+        downloadLink.style.display = 'inline-block';
+        statusEl.textContent = 'Klar! Bilden är upscalad.';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Något gick fel vid upscaling. Kolla konsolen (F12).';
+      } finally {
+        upscaleBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
