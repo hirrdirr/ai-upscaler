@@ -37,7 +37,7 @@
       flex-wrap: wrap;
       gap: 12px;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }
     label {
       font-size: 0.9rem;
@@ -136,11 +136,12 @@
   <div class="card">
     <h1>AI Upscaler</h1>
     <p class="subtitle">
-      Allt körs direkt i din webbläsare. Ingen bild laddas upp till någon server.
+      Allt körs direkt i din webbläsare. Inga bilder laddas upp till någon server.
     </p>
 
     <div class="controls">
       <input type="file" id="fileInput" accept="image/*" />
+
       <label for="scaleSelect">Skala:</label>
       <select id="scaleSelect">
         <option value="2">2x (rekommenderad)</option>
@@ -148,10 +149,20 @@
         <option value="6">6x (experimentell)</option>
         <option value="8">8x (endast små bilder)</option>
       </select>
+
+      <label for="modelSelect">Modell:</label>
+      <select id="modelSelect">
+        <option value="thick">Thick – max skärpa</option>
+        <option value="medium">Medium – balans</option>
+        <option value="default">Default – snabbast</option>
+      </select>
+
       <button id="upscaleBtn" disabled>Upscale</button>
     </div>
+
     <div class="hint">
-      6x och 8x kan kräva en stark dator och mindre originalbild. För stora bilder blockeras 8x automatiskt.
+      Modell: <b>Thick</b> ger bäst detalj (liknar UltraSharp-stil) men är tyngst.
+      Medium är kompromiss. Default är snabbast. 6x/8x kräver liten bild och hyfsad dator.
     </div>
 
     <div id="status">Ladda upp en bild för att börja.</div>
@@ -178,8 +189,12 @@
 
   <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <!-- Standard UpscalerJS-modell (2x) -->
+  <!-- Default-model (snabb) -->
   <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js"></script>
+  <!-- ESRGAN Medium 2x (balans) -->
+  <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-medium@latest/dist/umd/2x.min.js"></script>
+  <!-- ESRGAN Thick 2x (max kvalitet) -->
+  <script src="https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-thick@latest/dist/umd/2x.min.js"></script>
   <!-- UpscalerJS -->
   <script src="https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js"></script>
 
@@ -191,6 +206,7 @@
     const downloadLink = document.getElementById('downloadLink');
     const statusEl = document.getElementById('status');
     const scaleSelect = document.getElementById('scaleSelect');
+    const modelSelect = document.getElementById('modelSelect');
 
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
@@ -198,21 +214,20 @@
     const originalDims = document.getElementById('originalDims');
     const upscaledDims = document.getElementById('upscaledDims');
 
-    let upscaler = null;
-
     // Max output-storlek för 8x (skydd mot browser-död)
     const MAX_OUTPUT_SIZE_PX = 8000; // längsta sida
-
-    window.addEventListener('load', () => {
-      upscaler = new Upscaler({
-        model: DefaultUpscalerJSModel,
-      });
-      statusEl.textContent = 'Modell klar. Ladda upp en bild.';
-    });
 
     function formatDims(w, h) {
       if (!w || !h) return '–';
       return `${w} × ${h} px`;
+    }
+
+    function waitForImageLoad(img) {
+      return new Promise((resolve, reject) => {
+        if (img.complete && img.naturalWidth > 0) return resolve();
+        img.onload = () => resolve();
+        img.onerror = err => reject(err);
+      });
     }
 
     fileInput.addEventListener('change', e => {
@@ -227,9 +242,8 @@
         upscaledDims.textContent = '–';
 
         upscaleBtn.disabled = false;
-        statusEl.textContent = 'Bild laddad. Välj skala och kör.';
+        statusEl.textContent = 'Bild laddad. Välj skala och modell, sedan kör.';
 
-        // När originalbilden faktiskt är inladdad, uppdatera pixelinfo
         waitForImageLoad(originalImg).then(() => {
           originalDims.textContent = formatDims(
             originalImg.naturalWidth,
@@ -239,14 +253,6 @@
       };
       reader.readAsDataURL(file);
     });
-
-    function waitForImageLoad(img) {
-      return new Promise((resolve, reject) => {
-        if (img.complete && img.naturalWidth > 0) return resolve();
-        img.onload = () => resolve();
-        img.onerror = err => reject(err);
-      });
-    }
 
     // Steg-baserad progress: stepIndex börjar på 1
     function setStepProgress(stepIndex, totalSteps) {
@@ -303,16 +309,36 @@
       });
     }
 
+    // Plocka rätt modell baserat på dropdown
+    function getSelectedModel() {
+      const key = modelSelect.value;
+      if (key === 'default') {
+        // global från default-model UMD
+        return DefaultUpscalerJSModel;
+      }
+      if (key === 'medium') {
+        // global från esrgan-medium/2x UMD
+        return ESRGANMedium2x;
+      }
+      // thick som default om något knasar
+      return ESRGANThick2x;
+    }
+
     upscaleBtn.addEventListener('click', async () => {
       if (!originalImg.src) return;
 
       const scale = parseInt(scaleSelect.value, 10);
-
       if (!isScaleSafe(scale)) {
         return;
       }
 
-      statusEl.textContent = `Upscalear (${scale}x)...`;
+      const model = getSelectedModel();
+      let modelLabel = modelSelect.options[modelSelect.selectedIndex].text;
+      statusEl.textContent = `Upscalear (${scale}x) med modell: ${modelLabel}...`;
+
+      // skapar en ny Upscaler-instans per körning, baserat på vald modell
+      const upscaler = new Upscaler({ model });
+
       upscaleBtn.disabled = true;
       fileInput.disabled = true;
 
@@ -330,7 +356,7 @@
           finalSrc = await upscaler.upscale(originalImg, opts);
         } else if (scale === 4) {
           // 2 steg: 2x + 4x
-          statusEl.textContent = 'Steg 1/2 (2x)...';
+          statusEl.textContent = `Steg 1/2 (2x) – ${modelLabel}...`;
           setStepProgress(1, 2);
           const first = await upscaler.upscale(originalImg, opts);
 
@@ -338,12 +364,12 @@
           tempImg.src = first;
           await waitForImageLoad(tempImg);
 
-          statusEl.textContent = 'Steg 2/2 (4x)...';
+          statusEl.textContent = `Steg 2/2 (4x) – ${modelLabel}...`;
           setStepProgress(2, 2);
           finalSrc = await upscaler.upscale(tempImg, opts);
         } else if (scale === 6) {
           // 2 steg: 2x AI + 3x canvas
-          statusEl.textContent = 'Steg 1/2 (2x AI)...';
+          statusEl.textContent = `Steg 1/2 (2x AI) – ${modelLabel}...`;
           setStepProgress(1, 2);
           const first = await upscaler.upscale(originalImg, opts);
 
@@ -352,7 +378,7 @@
           finalSrc = await scaleWithCanvas(first, 3);
         } else if (scale === 8) {
           // 3 steg: 2x, 4x, 8x
-          statusEl.textContent = 'Steg 1/3 (2x)...';
+          statusEl.textContent = `Steg 1/3 (2x) – ${modelLabel}...`;
           setStepProgress(1, 3);
           const first = await upscaler.upscale(originalImg, opts);
 
@@ -360,7 +386,7 @@
           temp1.src = first;
           await waitForImageLoad(temp1);
 
-          statusEl.textContent = 'Steg 2/3 (4x)...';
+          statusEl.textContent = `Steg 2/3 (4x) – ${modelLabel}...`;
           setStepProgress(2, 3);
           const second = await upscaler.upscale(temp1, opts);
 
@@ -368,7 +394,7 @@
           temp2.src = second;
           await waitForImageLoad(temp2);
 
-          statusEl.textContent = 'Steg 3/3 (8x)...';
+          statusEl.textContent = `Steg 3/3 (8x) – ${modelLabel}...`;
           setStepProgress(3, 3);
           finalSrc = await upscaler.upscale(temp2, opts);
         } else {
@@ -386,8 +412,7 @@
 
         downloadLink.href = finalSrc;
         downloadLink.style.display = 'inline-block';
-        statusEl.textContent = `Klar! Upscalad till ${scale}x.`;
-
+        statusEl.textContent = `Klar! Upscalad till ${scale}x med modell: ${modelLabel}.`;
       } catch (err) {
         console.error(err);
         statusEl.textContent = 'Ett fel inträffade. Öppna konsolen (F12) för detaljer.';
