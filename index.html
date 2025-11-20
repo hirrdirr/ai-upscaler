@@ -112,6 +112,12 @@
       border-radius: 6px;
       background: black;
     }
+    .dims {
+      margin-top: 6px;
+      font-size: 0.8rem;
+      color: #999;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+    }
     #downloadLink {
       display: inline-block;
       margin-top: 8px;
@@ -159,10 +165,12 @@
       <div class="preview">
         <h2>Original</h2>
         <img id="originalImg" />
+        <p class="dims" id="originalDims">–</p>
       </div>
       <div class="preview">
         <h2>Upscalad</h2>
         <img id="upscaledImg" />
+        <p class="dims" id="upscaledDims">–</p>
         <a id="downloadLink" href="#" download="upscaled.png" style="display:none;">Ladda ner bild</a>
       </div>
     </div>
@@ -187,6 +195,9 @@
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
 
+    const originalDims = document.getElementById('originalDims');
+    const upscaledDims = document.getElementById('upscaledDims');
+
     let upscaler = null;
 
     // Max output-storlek för 8x (skydd mot browser-död)
@@ -199,6 +210,11 @@
       statusEl.textContent = 'Modell klar. Ladda upp en bild.';
     });
 
+    function formatDims(w, h) {
+      if (!w || !h) return '–';
+      return `${w} × ${h} px`;
+    }
+
     fileInput.addEventListener('change', e => {
       const file = e.target.files[0];
       if (!file) return;
@@ -208,8 +224,18 @@
         originalImg.src = ev.target.result;
         upscaledImg.src = '';
         downloadLink.style.display = 'none';
+        upscaledDims.textContent = '–';
+
         upscaleBtn.disabled = false;
         statusEl.textContent = 'Bild laddad. Välj skala och kör.';
+
+        // När originalbilden faktiskt är inladdad, uppdatera pixelinfo
+        waitForImageLoad(originalImg).then(() => {
+          originalDims.textContent = formatDims(
+            originalImg.naturalWidth,
+            originalImg.naturalHeight
+          );
+        });
       };
       reader.readAsDataURL(file);
     });
@@ -352,6 +378,12 @@
         }
 
         upscaledImg.src = finalSrc;
+        await waitForImageLoad(upscaledImg);
+        upscaledDims.textContent = formatDims(
+          upscaledImg.naturalWidth,
+          upscaledImg.naturalHeight
+        );
+
         downloadLink.href = finalSrc;
         downloadLink.style.display = 'inline-block';
         statusEl.textContent = `Klar! Upscalad till ${scale}x.`;
